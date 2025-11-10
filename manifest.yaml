@@ -1,0 +1,30 @@
+apiVersion: v1
+kind: Plugin
+metadata:
+  author: luorisky
+  name: SnmpPlugin
+  repository: ''
+  version: 0.1.0
+  description:
+    en_US: 一个webhook插件接收snmp trap,并发送主动消息
+    zh_Hans: 一个webhook插件接收snmp trap,并发送主动消息
+  label:
+    en_US: SnmpPlugin
+    zh_Hans: SnmpPlugin
+  icon: assets/icon.svg
+spec:
+  config: []
+  components:
+    EventListener:
+      fromDirs:
+      - path: components/event_listener/
+    Command:
+      fromDirs:
+      - path: components/commands/
+    Tool:
+      fromDirs:
+      - path: components/tools/
+execution:
+  python:
+    path: main.py
+    attr: SnmpPlugin
