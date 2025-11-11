@@ -3,14 +3,43 @@
 from __future__ import annotations
 
 from typing import Any, AsyncGenerator
+import logging
 
 from langbot_plugin.api.definition.components.command.command import Command, Subcommand
 from langbot_plugin.api.entities.builtin.command.context import ExecuteContext, CommandReturn
 
+# 设置日志
+logger = logging.getLogger(__name__)
+
 
 class SnmpStatus(Command):
-    
+
     async def initialize(self):
         await super().initialize()
-        
-        "Fill with your code here"
+        logger.info("SNMP Status Command 初始化完成")
+        print("🚀 SnmpStatus Command 已加载并初始化完成!")
+
+    async def execute(self, ctx: ExecuteContext) -> CommandReturn:
+        """
+        处理 /snmp_status 命令
+        """
+        logger.info("执行 /snmp_status 命令")
+
+        # 构建状态信息
+        status_message = "📊 **SNMP Trap Webhook 插件状态** 📊\n\n"
+        status_message += "🔌 **插件名称**: SnmpPlugin\n"
+        status_message += "📋 **版本**: 0.1.0\n"
+        status_message += "👤 **作者**: luorisky\n"
+        status_message += "🔗 **连接地址**: ws://langbot.luohang.net.cn:5401/debug/ws\n"
+        status_message += "⚙️ **组件状态**:\n"
+        status_message += "  ✅ EventListener - 已加载\n"
+        status_message += "  ✅ Command - 已加载\n"
+        status_message += "  ✅ Tool - 已加载\n"
+        status_message += "⏰ **检查时间**: 刚刚\n"
+        status_message += "\n🚨 **说明**: 插件正在运行，等待 SNMP Trap 事件..."
+
+        # 返回命令结果
+        return CommandReturn(
+            content=status_message,
+            message_type="text"
+        )

@@ -3,13 +3,15 @@ kind: Command
 metadata:
   name: snmp_status
   label:
-    en_US: SnmpStatus
-    zh_Hans: SnmpStatus
+    en_US: snmp_status
+    zh_Hans: snmp_status
   description:
     en_US: '查看插件状态'
     zh_Hans: '查看插件状态'
 spec:
-execution:
-  python:
-    path: snmp_status.py
-    attr: SnmpStatus
+  command: 'snmp_status'
+  parameters: {}
+  execution:
+    python:
+      path: snmp_status.py
+      attr: SnmpStatus

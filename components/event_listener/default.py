@@ -4,11 +4,46 @@ from __future__ import annotations
 
 from langbot_plugin.api.definition.components.common.event_listener import EventListener
 from langbot_plugin.api.entities import events, context
+import logging
+
+# 设置日志
+logger = logging.getLogger(__name__)
 
 
 class DefaultEventListener(EventListener):
 
     async def initialize(self):
         await super().initialize()
-        
-        "Fill with your code here"
+        logger.info("SNMP Trap EventListener 初始化完成")
+
+    async def on_event(self, event: events.Event, ctx: context.EventContext):
+        """
+        处理所有事件，用于调试和数据格式分析
+        """
+        logger.info(f"接收到事件: {type(event).__name__}")
+        logger.info(f"事件数据: {event}")
+
+        # 检查是否为网络相关事件
+        event_data = {
+            "event_type": type(event).__name__,
+            "event_content": str(event),
+            "timestamp": ctx.current_time
+        }
+
+        # 打印事件详细信息
+        print("="*50)
+        print("🔍 接收到新事件:")
+        print(f"类型: {event_data['event_type']}")
+        print(f"内容: {event_data['event_content']}")
+        print(f"时间: {event_data['timestamp']}")
+        print("="*50)
+
+        # 检查是否有 SNMP 相关的事件
+        event_str = str(event).lower()
+        if any(keyword in event_str for keyword in ['snmp', 'trap', 'network', 'alert', 'oid']):
+            print("🚨 检测到可能的 SNMP 相关事件!")
+            print(f"详细内容: {event}")
+            print("="*50)
+
+        # 调用父类方法
+        await super().on_event(event, ctx)
