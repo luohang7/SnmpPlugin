@@ -14,36 +14,27 @@ class DefaultEventListener(EventListener):
 
     async def initialize(self):
         await super().initialize()
-        logger.info("SNMP Trap EventListener 初始化完成")
 
-    async def on_event(self, event: events.Event, ctx: context.EventContext):
-        """
-        处理所有事件，用于调试和数据格式分析
-        """
-        logger.info(f"接收到事件: {type(event).__name__}")
-        logger.info(f"事件数据: {event}")
-
-        # 检查是否为网络相关事件
-        event_data = {
-            "event_type": type(event).__name__,
-            "event_content": str(event),
-            "timestamp": ctx.current_time
-        }
-
-        # 打印事件详细信息
-        print("="*50)
-        print("🔍 接收到新事件:")
-        print(f"类型: {event_data['event_type']}")
-        print(f"内容: {event_data['event_content']}")
-        print(f"时间: {event_data['timestamp']}")
-        print("="*50)
-
-        # 检查是否有 SNMP 相关的事件
-        event_str = str(event).lower()
-        if any(keyword in event_str for keyword in ['snmp', 'trap', 'network', 'alert', 'oid']):
-            print("🚨 检测到可能的 SNMP 相关事件!")
-            print(f"详细内容: {event}")
+        # 监听私聊消息
+        @self.handler(events.PersonMessageReceived)
+        async def handle_person_message(event_context: context.EventContext):
+            """处理私聊消息事件"""
+            print("="*50)
+            print("🔍 收到私聊消息事件:")
+            print(f"事件类型: {type(event_context.event).__name__}")
+            print(f"事件内容: {event_context.event}")
+            print(f"发送者ID: {event_context.event.sender_id}")
+            print(f"消息内容: {event_context.event.message_chain}")
             print("="*50)
 
-        # 调用父类方法
-        await super().on_event(event, ctx)
+        # 监听群消息
+        @self.handler(events.GroupMessageReceived)
+        async def handle_group_message(event_context: context.EventContext):
+            """处理群消息事件"""
+            print("="*50)
+            print("🔍 收到群消息事件:")
+            print(f"事件类型: {type(event_context.event).__name__}")
+            print(f"事件内容: {event_context.event}")
+            print("="*50)
+
+        logger.info("EventListener 初始化完成，开始监听事件...")

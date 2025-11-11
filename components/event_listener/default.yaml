@@ -6,8 +6,7 @@ metadata:
     en_US: DefaultEventListener
     zh_Hans: DefaultEventListener
 spec:
-  events: []
-  execution:
-    python:
-      path: default.py
-      attr: DefaultEventListener
+execution:
+  python:
+    path: default.py
+    attr: DefaultEventListener
