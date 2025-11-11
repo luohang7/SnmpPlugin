@@ -8,5 +8,5 @@ metadata:
 spec:
 execution:
   python:
-    path: default.py
-    attr: DefaultEventListener
+    path: fixed_listener.py
+    attr: FixedEventListener

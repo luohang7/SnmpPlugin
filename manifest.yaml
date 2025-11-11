@@ -13,7 +13,16 @@ metadata:
     zh_Hans: SnmpPlugin
   icon: assets/icon.svg
 spec:
-  config: []
+  config:
+  - name: default_group_id
+    label:
+      en_US: Default QQ Group ID
+      zh_Hans: 默认QQ群号
+    type: string
+    default: "123456789"
+    description:
+      en_US: The default QQ group ID to send SNMP trap alerts to
+      zh_Hans: 发送SNMP Trap告警的默认QQ群号
   components:
     EventListener:
       fromDirs:
@@ -21,6 +30,9 @@ spec:
     Command:
       fromDirs:
       - path: components/commands/
+    Tool:
+      fromDirs:
+      - path: components/tools/
 execution:
   python:
     path: main.py

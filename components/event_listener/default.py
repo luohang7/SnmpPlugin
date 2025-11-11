@@ -5,6 +5,17 @@ from __future__ import annotations
 from langbot_plugin.api.definition.components.common.event_listener import EventListener
 from langbot_plugin.api.entities import events, context
 import logging
+from typing import Dict, Any
+from datetime import datetime
+
+# 导入SNMP Trap接收服务
+import sys
+import os
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'services'))
+from simple_trap_receiver import SimpleTrapReceiver
+
+# 导入消息辅助工具
+from ..utils.message_helper import MessageHelper
 
 # 设置日志
 logger = logging.getLogger(__name__)
@@ -12,8 +23,26 @@ logger = logging.getLogger(__name__)
 
 class DefaultEventListener(EventListener):
 
+    def __init__(self):
+        super().__init__()
+        # 默认群组ID，将通过插件配置设置
+        self.default_group_id = None
+        self.trap_count = 0
+        # SNMP Trap接收器
+        self.snmp_receiver = None
+
     async def initialize(self):
         await super().initialize()
+
+        # 使用消息辅助工具获取群组ID
+        self.default_group_id = await MessageHelper.get_group_id(self.plugin)
+
+        # 初始化SNMP Trap接收器
+        await self._init_snmp_receiver()
+
+        print(f"🔧 SNMP Trap 监听器已初始化")
+        print(f"📱 默认 QQ 群 ID: {self.default_group_id}")
+        print(f"🎯 开始监听 SNMP 相关消息...")
 
         # 监听私聊消息
         @self.handler(events.PersonMessageReceived)
@@ -22,9 +51,21 @@ class DefaultEventListener(EventListener):
             print("="*50)
             print("🔍 收到私聊消息事件:")
             print(f"事件类型: {type(event_context.event).__name__}")
-            print(f"事件内容: {event_context.event}")
             print(f"发送者ID: {event_context.event.sender_id}")
-            print(f"消息内容: {event_context.event.message_chain}")
+
+            # 提取消息内容
+            message_text = ""
+            for msg in event_context.event.message_chain:
+                if hasattr(msg, 'text'):
+                    message_text += msg.text
+
+            print(f"消息内容: {message_text}")
+
+            # 检查是否包含 SNMP 相关内容
+            if self._is_snmp_related(message_text):
+                print("🚨 检测到可能的 SNMP 相关消息!")
+                await self._process_snmp_trap_message(message_text, "person", event_context.event.sender_id)
+
             print("="*50)
 
         # 监听群消息
@@ -33,8 +74,194 @@ class DefaultEventListener(EventListener):
             """处理群消息事件"""
             print("="*50)
             print("🔍 收到群消息事件:")
-            print(f"事件类型: {type(event_context.event).__name__}")
-            print(f"事件内容: {event_context.event}")
+
+            # 提取消息内容
+            message_text = ""
+            for msg in event_context.event.message_chain:
+                if hasattr(msg, 'text'):
+                    message_text += msg.text
+
+            print(f"消息内容: {message_text}")
+
+            # 检查是否包含 SNMP 相关内容
+            if self._is_snmp_related(message_text):
+                print("🚨 检测到可能的 SNMP 相关消息!")
+                group_id = getattr(event_context.event, 'group_id', self.default_group_id)
+                await self._process_snmp_trap_message(message_text, "group", group_id, event_context.event.group_id)
+
             print("="*50)
 
-        logger.info("EventListener 初始化完成，开始监听事件...")
+        # 尝试监听其他可能的事件类型（如系统事件）
+        try:
+            # 这里可以根据需要监听其他类型的事件
+            pass
+        except:
+            pass
+
+        logger.info("EventListener 初始化完成，开始监听 SNMP Trap 相关事件...")
+
+    def _is_snmp_related(self, message_text: str) -> bool:
+        """检查消息是否与 SNMP 相关"""
+        if not message_text:
+            return False
+
+        snmp_keywords = [
+            'snmp', 'trap', 'oid', 'mib', 'cisco', 'juniper', 'huawei',
+            'h3c', 'aruba', 'fortinet', 'paloalto', 'checkpoint',
+            '告警', 'alert', 'critical', 'warning', 'error',
+            'down', 'up', 'interface', 'cpu', 'memory', 'disk'
+        ]
+
+        message_lower = message_text.lower()
+        return any(keyword in message_lower for keyword in snmp_keywords)
+
+    async def _process_snmp_trap_message(self, message: str, msg_type: str, target_id: str, group_id: str = None):
+        """处理 SNMP Trap 消息并发送到 QQ 群"""
+        try:
+            self.trap_count += 1
+
+            # 简单解析消息内容（实际项目中可能需要更复杂的解析）
+            parsed_trap = self._parse_snmp_message(message)
+
+            # 构建告警消息
+            alert_message = MessageHelper.format_trap_message(parsed_trap, "网络告警")
+
+            # 使用消息辅助工具发送到QQ群
+            await MessageHelper.send_to_qq_group(
+                self.plugin,
+                alert_message,
+                group_id or self.default_group_id,
+                "SNMP Trap"
+            )
+
+            print(f"✅ SNMP Trap 处理完成 (第 {self.trap_count} 次)")
+
+        except Exception as e:
+            logger.error(f"处理 SNMP Trap 消息时出错: {e}")
+            print(f"❌ 处理 SNMP Trap 失败: {e}")
+
+    def _parse_snmp_message(self, message: str) -> Dict[str, Any]:
+        """解析 SNMP Trap 消息（简单版本）"""
+        # 这里是简化版解析，实际项目中可能需要解析 SNMP 协议数据
+        return {
+            'raw_message': message,
+            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            'trap_count': self.trap_count,
+            'message_type': 'simple_parse',
+            'severity': self._extract_severity(message),
+            'hostname': self._extract_hostname(message)
+        }
+
+    def _extract_severity(self, message: str) -> str:
+        """提取告警级别"""
+        message_lower = message.lower()
+        if any(word in message_lower for word in ['critical', 'critical', '严重']):
+            return 'Critical'
+        elif any(word in message_lower for word in ['warning', 'warn', '警告']):
+            return 'Warning'
+        elif any(word in message_lower for word in ['info', 'info', '信息']):
+            return 'Info'
+        else:
+            return 'Unknown'
+
+    def _extract_hostname(self, message: str) -> str:
+        """提取主机名"""
+        # 简单的主机名提取，实际项目中可能需要更复杂的解析
+        import re
+
+        # 尝试匹配 IP 地址
+        ip_pattern = r'\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b'
+        ip_match = re.search(ip_pattern, message)
+        if ip_match:
+            return ip_match.group()
+
+        # 尝试提取可能的主机名
+        host_pattern = r'\b(?:[a-zA-Z0-9-]+\.(?:com|net|org|gov|edu|cn))\b'
+        host_match = re.search(host_pattern, message)
+        if host_match:
+            return host_match.group()
+
+        return "Unknown"
+
+  
+    async def _init_snmp_receiver(self):
+        """初始化SNMP Trap接收器"""
+        try:
+            print("🔌 正在初始化SNMP Trap接收器...")
+
+            # 创建SNMP Trap接收器，监听端口1162
+            self.snmp_receiver = SimpleTrapReceiver(port=1162, host='0.0.0.0')  # 监听所有网络接口
+            self.snmp_receiver.set_callback(self._handle_snmp_trap)
+
+            # 直接启动接收器（同步方式）
+            self.snmp_receiver.start()
+            print(f"✅ SNMP Trap接收器已成功启动，监听端口: 1162")
+            print(f"🌐 监听地址: 0.0.0.0:1162")
+            print(f"📡 等待接收SNMP Trap消息...")
+
+        except Exception as e:
+            print(f"❌ 初始化SNMP Trap接收器失败: {e}")
+            logger.error(f"初始化SNMP Trap接收器失败: {e}")
+            self.snmp_receiver = None
+
+    async def _run_snmp_receiver(self):
+        """在后台运行SNMP接收器"""
+        try:
+            if self.snmp_receiver:
+                await self.snmp_receiver.start()
+        except asyncio.CancelledError:
+            print("🛑 SNMP Trap接收器任务被取消")
+        except Exception as e:
+            print(f"❌ SNMP Trap接收器运行出错: {e}")
+            logger.error(f"SNMP Trap接收器运行出错: {e}")
+
+    async def _handle_snmp_trap(self, trap_info: Dict[str, Any]):
+        """处理接收到的SNMP Trap"""
+        try:
+            self.trap_count += 1
+            trap_info['trap_count'] = self.trap_count
+
+            print("\n" + "="*60)
+            print(f"🚨 **收到SNMP Trap** 🚨")
+            print(f"📊 **Trap序号**: #{self.trap_count}")
+            print(f"⏰ **接收时间**: {trap_info.get('timestamp')}")
+            print(f"🌐 **来源IP**: {trap_info.get('source_ip')}")
+            print(f"📡 **来源端口**: {trap_info.get('source_port')}")
+            print(f"📏 **数据长度**: {trap_info.get('data_length')} 字节")
+
+            if trap_info.get('snmp_version'):
+                print(f"🔧 **SNMP版本**: {trap_info.get('snmp_version')}")
+
+            if trap_info.get('readable_content'):
+                print(f"📝 **可读内容**: {trap_info.get('readable_content')}")
+
+            if trap_info.get('parsed'):
+                print("✅ **解析状态**: 成功解析")
+            else:
+                print("⚠️ **解析状态**: 未能完全解析（显示原始数据前100字符）")
+                print(f"🔍 **原始数据**: {trap_info.get('raw_data')}")
+
+            print("="*60)
+
+            # 发送告警到QQ群
+            alert_message = MessageHelper.format_trap_message(trap_info, "SNMP Trap")
+            await MessageHelper.send_to_qq_group(
+                self.plugin,
+                alert_message,
+                self.default_group_id,
+                "SNMP Trap"
+            )
+
+            logger.info(f"SNMP Trap #{self.trap_count} 处理完成")
+
+        except Exception as e:
+            logger.error(f"处理SNMP Trap时出错: {e}")
+            print(f"❌ 处理SNMP Trap失败: {e}")
+
+    
+    async def cleanup(self):
+        """清理资源"""
+        if self.snmp_receiver:
+            await self.snmp_receiver.stop()
+            self.snmp_receiver = None
+            logger.info("SNMP Trap接收器已清理")

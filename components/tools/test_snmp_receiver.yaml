@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Tool
+metadata:
+  name: test_snmp_receiver
+  label:
+    en_US: TestSnmpReceiver
+    zh_Hans: TestSnmpReceiver
+  description:
+    en_US: 'Test SNMP Trap receiver functionality'
+    zh_Hans: '测试SNMP Trap接收器功能'
+spec:
+execution:
+  python:
+    path: test_snmp_receiver.py
+    attr: TestSnmpReceiver
