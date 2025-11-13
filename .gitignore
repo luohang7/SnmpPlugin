@@ -174,3 +174,12 @@ cython_debug/
 .pypirc
 
 /data/
+
+# LangBot specific
+*.lbppkg
+
+# Git directory
+.git/
+
+# Claude
+.claude/

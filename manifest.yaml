@@ -30,9 +30,6 @@ spec:
     Command:
       fromDirs:
       - path: components/commands/
-    Tool:
-      fromDirs:
-      - path: components/tools/
 execution:
   python:
     path: main.py
