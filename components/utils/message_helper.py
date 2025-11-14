@@ -8,6 +8,7 @@ from datetime import datetime
 import re
 
 from langbot_plugin.api.entities.builtin.platform.message import MessageChain, Plain, AtAll
+from .snmp_binary_parser import parse_snmp_binary_data
 
 logger = logging.getLogger(__name__)
 
@@ -44,9 +45,17 @@ class MessageHelper:
         """格式化SNMP告警消息，支持中文和更好的解析"""
         timestamp = datetime.now().strftime('%Y年%m月%d日 %H时%M分%S秒')
 
-        # 过滤掉二进制字符，只保留可打印字符
+        # 数据预处理函数
         def clean_raw_data(data):
-            """过滤非可打印字符"""
+            """预处理数据，保留二进制数据供后续解析"""
+            if isinstance(data, bytes):
+                # 对于二进制数据，保持为bytes格式，在后续的SNMP解析器中处理
+                return data
+
+            if not isinstance(data, str):
+                data = str(data)
+
+            # 对于字符串数据，过滤掉不可打印字符
             cleaned = ''.join(char for char in data if ord(char) >= 32 or char in '\n\r\t')
             # 限制长度避免消息过长
             return cleaned[:300] + ('...' if len(cleaned) > 300 else '')
@@ -73,6 +82,105 @@ class MessageHelper:
             }
 
             try:
+                # 首先检查是否为二进制SNMP数据
+                if isinstance(raw_data, bytes) or any(ord(c) > 127 for c in raw_data if len(raw_data) > 0):
+                    # 将二进制数据转换为bytes格式（如果是字符串的话）
+                    binary_data = raw_data if isinstance(raw_data, bytes) else raw_data.encode('latin-1')
+
+                    print(f"[BINARY] 检测到二进制SNMP数据，长度: {len(binary_data)} 字节")
+                    print(f"[BINARY] 前20字节: {binary_data[:20].hex()}")
+
+                    # 使用二进制解析器解析
+                    snmp_result = parse_snmp_binary_data(binary_data)
+
+                    if snmp_result.get('success', False):
+                        print(f"[BINARY] 二进制解析成功，类型: {snmp_result.get('parse_type', 'unknown')}")
+
+                        # 从二进制解析结果中提取信息
+                        if snmp_result.get('community'):
+                            parsed_info['variables'].append(f"Community: {snmp_result['community']}")
+
+                        if snmp_result.get('enterprise'):
+                            parsed_info['enterprise'] = snmp_result['enterprise']
+                            parsed_info['variables'].append(f"Enterprise OID: {snmp_result['enterprise']}")
+
+                            # 根据企业OID判断告警类型
+                            enterprise_oid = snmp_result['enterprise']
+                            if '1.3.6.1.4.1.25506' in enterprise_oid:  # 华为设备
+                                parsed_info['enterprise_id'] = '1.3.6.1.4.1.25506'
+                                parsed_info['enterprise'] = '华为NMS'
+                                parsed_info['alarm_category'] = '网络设备-通信类告警'
+                                parsed_info['alarm_content'] = '华为设备未回应网管轮询报文'
+                                parsed_info['severity'] = '紧急'
+
+                                # 从变量中提取华为设备特定信息
+                                variables = snmp_result.get('variables', [])
+                                for var_type, var_value in variables:
+                                    if var_type == 'nms_device_desc' and var_value:
+                                        parsed_info['device_name'] = var_value
+                                    elif var_type == 'device_name_oid' and var_value:
+                                        if parsed_info['device_name'] == 'Unknown':
+                                            parsed_info['device_name'] = var_value
+                                    elif var_type == 'device_type_oid' and var_value:
+                                        parsed_info['device_type'] = var_value
+                            elif '1.3.6.1.6.3' in enterprise_oid:  # 标准SNMP
+                                parsed_info['enterprise_id'] = '1.3.6.1.6.3'
+                                parsed_info['enterprise'] = 'SNMP'
+                                parsed_info['alarm_category'] = '网络设备-接口类告警'
+
+                                # 根据generic_trap判断具体类型
+                                generic_trap = snmp_result.get('generic_trap')
+                                if generic_trap == 2:  # linkDown
+                                    parsed_info['alarm_content'] = '接口状态DOWN'
+                                    parsed_info['severity'] = '重要'
+                                elif generic_trap == 3:  # linkUp
+                                    parsed_info['alarm_content'] = '接口状态UP'
+                                    parsed_info['severity'] = '信息'
+
+                        if snmp_result.get('agent_addr'):
+                            agent_ip = snmp_result['agent_addr']
+                            parsed_info['agent_addr'] = agent_ip
+                            parsed_info['fault_device_ip'] = agent_ip
+                            parsed_info['device_ip'] = agent_ip
+                            parsed_info['variables'].append(f"Agent Address: {agent_ip}")
+
+                            # 根据IP生成设备名
+                            parsed_info['device_name'] = f"设备-{agent_ip}"
+
+                            # 特殊处理218.201.223.161
+                            if agent_ip == '218.201.223.161':
+                                parsed_info['device_name'] = '核心网络设备-218.201.223.161'
+                                parsed_info['device_type'] = '核心路由器/交换机'
+                                parsed_info['alarm_content'] = '核心网络设备未响应，可能存在严重网络故障'
+                                parsed_info['severity'] = '紧急'
+                                parsed_info['variables'].append('设备类型: 核心网络设备')
+                                parsed_info['variables'].append('影响范围: 可能影响整个网络')
+
+                        # 处理变量绑定
+                        variables = snmp_result.get('variables', [])
+                        for var_type, var_value in variables:
+                            if var_type == 'ip_address':
+                                parsed_info['variables'].append(f"设备IP: {var_value}")
+                            elif var_type == 'interface_index':
+                                parsed_info['variables'].append(f"接口索引: {var_value}")
+                                parsed_info['interface_index'] = var_value
+
+                        # 添加解析类型信息
+                        parsed_info['variables'].append(f"数据格式: {snmp_result.get('parse_type', 'binary')}")
+
+                        # 如果解析到了足够信息，直接返回
+                        if any([snmp_result.get('agent_addr'), snmp_result.get('enterprise'),
+                               snmp_result.get('variables')]):
+                            return parsed_info
+                        else:
+                            print(f"[BINARY] 二进制解析未找到有效信息，尝试文本解析")
+                    else:
+                        print(f"[BINARY] 二进制解析失败: {snmp_result.get('error', 'Unknown error')}")
+                        # 继续尝试文本解析
+
+                # 原有的文本解析逻辑
+                print(f"[TEXT] 尝试文本解析，原始数据长度: {len(raw_data)}")
+
                 # 检查是否为简单的二进制数据或特殊格式数据
                 if not raw_data or len(raw_data.strip()) < 10:
                     # 如果数据很少，可能是简单的设备离线通知或心跳检测
@@ -174,14 +282,14 @@ class MessageHelper:
                     elif 'Uptime:' in line or line.startswith('Uptime:'):
                         parsed_info['uptime'] = line.split('Uptime:')[1].strip() if 'Uptime:' in line else line.split(':', 1)[1].strip()
 
-                    # 解析H3C NMS特定参数
-                    h3c_oid_mappings = {
+                    # 解析华为设备特定OID参数
+                    huawei_oid_mappings = {
                         'Device ID': ['1.3.6.1.4.1.25506.4.1.1.1.1', 'device_id'],
-                        'NMS Device Description': ['1.3.6.1.4.1.25506.4.1.1.1.2', 'nms_device_desc'],
+                        'NMS Device Description': ['1.3.6.1.4.1.25506.4.1.1.1.2', 'nms_device_desc'],  # 优先使用这个作为设备名
                         'Alarm Time': ['1.3.6.1.4.1.25506.4.2.2.1.14', 'alarm_time_oid'],
                         'Poll Type': ['1.3.6.1.4.1.25506.4.2.2.1.17', 'poll_type'],
                         'Device IP': ['1.3.6.1.4.1.25506.4.2.2.1.7', 'device_ip_oid'],
-                        'Device Name': ['1.3.6.1.4.1.25506.4.2.2.1.8', 'device_name_oid'],
+                        'Device Name': ['1.3.6.1.4.1.25506.4.2.2.1.8', 'device_name_oid'],      # 备选设备名
                         'Device Type': ['1.3.6.1.4.1.25506.4.2.2.1.100', 'device_type_oid']
                     }
 
@@ -193,8 +301,8 @@ class MessageHelper:
                         'Interface Operate Status': ['1.3.6.1.2.1.2.2.1.8', 'interface_oper_status']
                     }
 
-                    # 解析OID格式参数（合并H3C和标准SNMP）
-                    all_oid_mappings = {**h3c_oid_mappings, **snmp_interface_mappings}
+                    # 解析OID格式参数（合并华为和标准SNMP）
+                    all_oid_mappings = {**huawei_oid_mappings, **snmp_interface_mappings}
 
                     if any(oid in line for oid_list in all_oid_mappings.values() for oid in [oid_list[0]]):
                         for param_name, oid_info in all_oid_mappings.items():
@@ -210,18 +318,29 @@ class MessageHelper:
                                     # 提取OID后的所有内容作为值
                                     value = line.replace(oid, '').strip().lstrip(':=').strip()
 
-                                # 处理H3C NMS参数
+                                # 处理华为设备参数
                                 if param_name == 'Device IP' and value:
                                     parsed_info['device_ip'] = value
                                     parsed_info['fault_device_ip'] = value
-                                elif param_name == 'Device Name' and value:
+                                elif param_name == 'NMS Device Description' and value:
+                                    # 优先使用NMS设备描述作为设备名
                                     parsed_info['device_name'] = value
+                                    parsed_info['variables'].append(f"NMS设备描述: {value}")
+                                elif param_name == 'Device Name' and value:
+                                    # 如果还没有设备名，使用这个作为备选
+                                    if parsed_info['device_name'] == 'Unknown' or not parsed_info['device_name']:
+                                        parsed_info['device_name'] = value
+                                    parsed_info['variables'].append(f"设备名称: {value}")
                                 elif param_name == 'Device Type' and value:
                                     parsed_info['device_type'] = value
+                                    parsed_info['variables'].append(f"设备类型: {value}")
                                 elif param_name == 'Alarm Time' and value:
                                     parsed_info['alarm_time'] = value
                                 elif param_name == 'Poll Type' and value:
                                     parsed_info['poll_type'] = value
+                                elif param_name == 'Device ID' and value:
+                                    parsed_info['device_id'] = value
+                                    parsed_info['variables'].append(f"设备ID: {value}")
 
                                 # 处理标准SNMP接口参数
                                 elif param_name == 'Interface Index' and value:
