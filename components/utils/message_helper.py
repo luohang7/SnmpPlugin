@@ -133,25 +133,107 @@ class MessageHelper:
                             parsed_info['enterprise'] = snmp_result['enterprise']
                             parsed_info['variables'].append(f"Enterprise OID: {snmp_result['enterprise']}")
 
-                            # 根据企业OID判断告警类型
-                            enterprise_oid = snmp_result['enterprise']
-                            if '1.3.6.1.4.1.25506' in enterprise_oid:  # 华为设备
+                            # 根据多个条件判断华为设备
+                            enterprise_oid = snmp_result.get('enterprise')
+                            generic_trap = snmp_result.get('generic_trap')
+                            variables = snmp_result.get('variables', [])
+
+                            # 条件1: Enterprise OID匹配
+                            is_huawei_by_oid = enterprise_oid and '1.3.6.1.4.1.25506' in str(enterprise_oid)
+
+                            # 条件2: Generic Trap为enterpriseSpecific (6) 且有华为设备信息
+                            is_huawei_by_trap = generic_trap == 6 and any(
+                                var_type in ['device_id', 'device_ip'] and var_value
+                                for var_type, var_value in variables
+                            )
+
+                            if is_huawei_by_oid or is_huawei_by_trap:
                                 parsed_info['enterprise_id'] = '1.3.6.1.4.1.25506'
                                 parsed_info['enterprise'] = '华为NMS'
                                 parsed_info['alarm_category'] = '网络设备-通信类告警'
                                 parsed_info['alarm_content'] = '华为设备未回应网管轮询报文'
                                 parsed_info['severity'] = '紧急'
 
-                                # 从变量中提取华为设备特定信息
-                                variables = snmp_result.get('variables', [])
+                                print(f"[DEBUG] 识别为华为设备: OID={is_huawei_by_oid}, Trap={is_huawei_by_trap}")
+
+                                # 从变量中提取华为设备特定信息 (按优先级排序)
                                 for var_type, var_value in variables:
-                                    if var_type == 'nms_device_desc' and var_value:
+                                    print(f"[DEBUG] 处理变量: {var_type} = {var_value}")
+
+                                    # 第一优先级: 标准SNMP sysName (1.3.6.1.2.1.1.5.0)
+                                    if var_type == 'sysname' and var_value:
                                         parsed_info['device_name'] = var_value
-                                    elif var_type == 'device_name_oid' and var_value:
-                                        if parsed_info['device_name'] == 'Unknown':
+                                        parsed_info['sysname_source'] = 'standard_snmp'
+                                        print(f"[DEBUG] 设备SysName (标准SNMP): {var_value}")
+                                    # 第二优先级: 华为设备名称OID
+                                    elif var_type == 'device_name' and var_value:
+                                        if parsed_info['device_name'] == 'Unknown' or not parsed_info.get('sysname_source'):
                                             parsed_info['device_name'] = var_value
+                                            parsed_info['device_name_source'] = 'huawei_oid'
+                                        print(f"[DEBUG] 设备名称(华为OID): {var_value}")
+                                    # 第三优先级: NMS设备描述
+                                    elif var_type == 'nms_device_desc' and var_value:
+                                        if parsed_info['device_name'] == 'Unknown' or not parsed_info.get('sysname_source'):
+                                            parsed_info['device_name'] = var_value
+                                            parsed_info['device_name_source'] = 'nms_desc'
+                                        print(f"[DEBUG] 设备名称(NMS描述): {var_value}")
+                                    # 第四优先级: 系统描述
+                                    elif var_type == 'sysdescr' and var_value:
+                                        if parsed_info['device_name'] == 'Unknown' or not parsed_info.get('sysname_source'):
+                                            # 从系统描述中提取可能的设备名称
+                                            desc_name = self.extract_device_name_from_description(var_value)
+                                            if desc_name:
+                                                parsed_info['device_name'] = desc_name
+                                                parsed_info['device_name_source'] = 'sysdescr'
+                                        print(f"[DEBUG] 系统描述: {var_value}")
+                                    # 关键参数: Device ID (关键参数)
+                                    elif var_type == 'device_id' and var_value:
+                                        parsed_info['device_id'] = var_value
+                                        # 如果没有其他设备名称，使用设备ID
+                                        if parsed_info['device_name'] == 'Unknown' or not parsed_info.get('sysname_source'):
+                                            parsed_info['device_name'] = f"设备-{var_value[:8]}"
+                                            parsed_info['device_name_source'] = 'device_id'
+                                        print(f"[DEBUG] 设备ID(关键): {var_value}")
+                                    elif var_type == 'nms_device_desc' and var_value:
+                                        parsed_info['device_name'] = var_value
+                                        print(f"[DEBUG] 设备名称: {var_value}")
+                                    elif var_type == 'device_name_oid' and var_value:
+                                        if parsed_info['device_name'] == 'Unknown' or not parsed_info['device_name']:
+                                            parsed_info['device_name'] = var_value
+                                            print(f"[DEBUG] 设备名称(备选): {var_value}")
                                     elif var_type == 'device_type_oid' and var_value:
                                         parsed_info['device_type'] = var_value
+                                        print(f"[DEBUG] 设备类型: {var_value}")
+                                    elif var_type == 'device_id' and var_value:
+                                        # Device ID是关键参数，优先处理
+                                        if parsed_info['device_name'] == 'Unknown' or not parsed_info['device_name']:
+                                            parsed_info['device_name'] = f"设备-{var_value[:8]}"
+                                        parsed_info['device_id'] = var_value
+                                        print(f"[DEBUG] 设备ID(关键): {var_value}")
+                                    elif var_type == 'device_ip' and var_value:
+                                        parsed_info['fault_device_ip'] = var_value
+                                        # 如果还没有设备名，使用IP
+                                        if parsed_info['device_name'] == 'Unknown' or not parsed_info['device_name']:
+                                            parsed_info['device_name'] = f"设备-{var_value}"
+                                        print(f"[DEBUG] 设备IP: {var_value}")
+                                    elif var_type == 'device_type' and var_value:
+                                        parsed_info['device_type'] = var_value
+                                        print(f"[DEBUG] 设备类型: {var_value}")
+                                    elif var_type == 'alarm_time' and var_value:
+                                        parsed_info['alarm_time'] = var_value
+                                        print(f"[DEBUG] 告警时间: {var_value}")
+                                    elif var_type == 'poll_type' and var_value:
+                                        parsed_info['poll_type'] = var_value
+                                        print(f"[DEBUG] 轮询类型: {var_value}")
+                                    elif var_type == 'alarm_category' and var_value:
+                                        parsed_info['alarm_category'] = var_value
+                                        print(f"[DEBUG] 告警分类: {var_value}")
+                                    elif var_type == 'alarm_reason' and var_value:
+                                        parsed_info['alarm_reason'] = var_value
+                                        print(f"[DEBUG] 告警原因: {var_value}")
+                                    elif var_type == 'alarm_suggestion' and var_value:
+                                        parsed_info['alarm_suggestion'] = var_value
+                                        print(f"[DEBUG] 修复建议: {var_value}")
                             elif '1.3.6.1.6.3' in enterprise_oid:  # 标准SNMP
                                 parsed_info['enterprise_id'] = '1.3.6.1.6.3'
                                 parsed_info['enterprise'] = 'SNMP'
@@ -188,11 +270,46 @@ class MessageHelper:
                         # 处理变量绑定
                         variables = snmp_result.get('variables', [])
                         for var_type, var_value in variables:
-                            if var_type == 'ip_address':
+                            if var_type == 'sysname':
+                                parsed_info['variables'].append(f"设备SysName: {var_value}")
+                            elif var_type == 'device_name':
+                                parsed_info['variables'].append(f"设备名称: {var_value}")
+                            elif var_type == 'device_id':
+                                parsed_info['variables'].append(f"设备ID: {var_value}")
+                            elif var_type == 'device_ip':
+                                parsed_info['variables'].append(f"设备IP: {var_value}")
+                            elif var_type == 'alarm_level':
+                                parsed_info['variables'].append(f"告警级别: {var_value}")
+                            elif var_type == 'alarm_title':
+                                parsed_info['variables'].append(f"告警标题: {var_value}")
+                                parsed_info['alarm_content'] = var_value  # 使用告警标题作为告警内容
+                            elif var_type == 'alarm_content':
+                                parsed_info['variables'].append(f"告警内容: {var_value}")
+                                parsed_info['alarm_content'] = var_value  # 使用告警内容
+                            elif var_type == 'ip_address':
                                 parsed_info['variables'].append(f"设备IP: {var_value}")
                             elif var_type == 'interface_index':
                                 parsed_info['variables'].append(f"接口索引: {var_value}")
                                 parsed_info['interface_index'] = var_value
+                            elif var_type == 'nms_device_desc':
+                                parsed_info['variables'].append(f"NMS设备描述: {var_value}")
+                            elif var_type == 'device_type':
+                                parsed_info['variables'].append(f"设备类型: {var_value}")
+                            elif var_type == 'alarm_time':
+                                parsed_info['variables'].append(f"告警时间: {var_value}")
+                            elif var_type == 'poll_type':
+                                parsed_info['variables'].append(f"轮询类型: {var_value}")
+                            elif var_type == 'alarm_category':
+                                parsed_info['variables'].append(f"告警分类: {var_value}")
+                            elif var_type == 'alarm_reason':
+                                parsed_info['variables'].append(f"告警原因: {var_value}")
+                            elif var_type == 'alarm_suggestion':
+                                parsed_info['variables'].append(f"修复建议: {var_value}")
+                            elif var_type == 'alarm_level':
+                                parsed_info['variables'].append(f"告警级别: {var_value}")
+                            elif var_type == 'alarm_title':
+                                parsed_info['variables'].append(f"告警标题: {var_value}")
+                                parsed_info['alarm_content'] = var_value  # 使用告警标题作为告警内容
 
                         # 添加解析类型信息
                         parsed_info['variables'].append(f"数据格式: {snmp_result.get('parse_type', 'binary')}")
@@ -773,5 +890,39 @@ class MessageHelper:
             logger.error(f"Failed to send {message_type} to QQ group: {e}")
             print(f"[ERROR] Failed to send {message_type}: {e}")
             return False
+
+    def extract_device_name_from_description(description: str) -> Optional[str]:
+        """从系统描述中提取设备名称"""
+        if not description:
+            return None
+
+        # 华为设备系统描述的常见模式
+        # 例如: "HUAWEI TECH CO.,LTD. S5700-28C-EI"
+        # 或 "Huawei Versatile Routing Platform Software"
+
+        # 查找设备型号
+        model_patterns = [
+            r'S(\d{3,})[A-Z-]+',  # S5700-28C-EI
+            r'NE(\d+[A-Z-]+)',    # NE40E
+            r'AR(\d+[A-Z-]+)',    # AR1220
+            r'AC(\d+[A-Z-]+)',    # AC6605
+            r'CE(\d+[A-Z-]+)',    # CE12800
+        ]
+
+        import re
+        for pattern in model_patterns:
+            match = re.search(pattern, description)
+            if match:
+                return f"Huawei-{match.group(0)}"
+
+        # 如果没有找到型号，尝试提取第一个有意义的产品名称
+        words = description.split()
+        for word in words:
+            if len(word) >= 3 and word.isalnum():
+                # 过滤掉常见的公司名
+                if word.upper() not in ['HUAWEI', 'TECH', 'CO', 'LTD', 'VERSATILE', 'ROUTING', 'PLATFORM', 'SOFTWARE']:
+                    return word
+
+        return None
 
     # 个人消息功能已移除，只支持群消息
