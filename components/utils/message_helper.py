@@ -83,15 +83,44 @@ class MessageHelper:
 
             try:
                 # 首先检查是否为二进制SNMP数据
-                if isinstance(raw_data, bytes) or any(ord(c) > 127 for c in raw_data if len(raw_data) > 0):
-                    # 将二进制数据转换为bytes格式（如果是字符串的话）
-                    binary_data = raw_data if isinstance(raw_data, bytes) else raw_data.encode('latin-1')
+                is_binary = False
+                binary_data = None
 
+                if isinstance(raw_data, bytes):
+                    binary_data = raw_data
+                    is_binary = True
+                elif isinstance(raw_data, str) and len(raw_data) > 0:
+                    # 检查字符串是否包含高字节字符
+                    try:
+                        # 尝试检测是否为十六进制字符串
+                        if all(c in '0123456789abcdefABCDEF \t\n\r' for c in raw_data):
+                            # 可能是hex字符串，尝试转换
+                            hex_clean = raw_data.replace(' ', '').replace('\t', '').replace('\n', '').replace('\r', '')
+                            if len(hex_clean) % 2 == 0 and len(hex_clean) > 0:
+                                binary_data = bytes.fromhex(hex_clean)
+                                is_binary = True
+                                print(f"[BINARY] 从hex字符串转换，长度: {len(binary_data)} 字节")
+                        else:
+                            # 检查是否有不可打印字符
+                            if any(ord(c) > 127 for c in raw_data):
+                                # 安全地转换为字节（避免编码错误）
+                                binary_data = raw_data.encode('utf-8', errors='replace')
+                                is_binary = True
+                    except Exception as e:
+                        print(f"[DEBUG] 二进制检测失败: {e}")
+                        # 如果转换失败，视为普通文本
+                        pass
+
+                if is_binary and binary_data:
                     print(f"[BINARY] 检测到二进制SNMP数据，长度: {len(binary_data)} 字节")
                     print(f"[BINARY] 前20字节: {binary_data[:20].hex()}")
 
-                    # 使用二进制解析器解析
-                    snmp_result = parse_snmp_binary_data(binary_data)
+                    try:
+                        # 使用二进制解析器解析
+                        snmp_result = parse_snmp_binary_data(binary_data)
+                    except Exception as e:
+                        print(f"[ERROR] 二进制解析器失败: {e}")
+                        snmp_result = {'success': False, 'error': str(e)}
 
                     if snmp_result.get('success', False):
                         print(f"[BINARY] 二进制解析成功，类型: {snmp_result.get('parse_type', 'unknown')}")
@@ -176,7 +205,15 @@ class MessageHelper:
                             print(f"[BINARY] 二进制解析未找到有效信息，尝试文本解析")
                     else:
                         print(f"[BINARY] 二进制解析失败: {snmp_result.get('error', 'Unknown error')}")
-                        # 继续尝试文本解析
+                        # 提供基本的告警信息
+                        parsed_info['alarm_content'] = '网络设备告警（解析失败）'
+                        parsed_info['severity'] = '重要'
+                        parsed_info['alarm_category'] = '网络设备-通信类告警'
+                        parsed_info['variables'].append(f"解析错误: {snmp_result.get('error', 'Unknown error')}")
+                        parsed_info['variables'].append(f"原始数据类型: {type(raw_data).__name__}")
+                        if isinstance(raw_data, bytes):
+                            parsed_info['variables'].append(f"数据长度: {len(raw_data)} 字节")
+                        parsed_info['variables'].append(f"源地址: {source}")
 
                 # 原有的文本解析逻辑
                 print(f"[TEXT] 尝试文本解析，原始数据长度: {len(raw_data)}")
