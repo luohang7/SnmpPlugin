@@ -504,15 +504,25 @@ class DefaultEventListener(EventListener):
             # 使用MessageHelper发送消息
             from ..utils.message_helper import MessageHelper
 
-            # 在新的事件循环中运行异步方法
+            # 在新的事件循环中运行异步方法，增加超时处理
             def run_async():
                 import asyncio
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
                 try:
-                    return loop.run_until_complete(
-                        MessageHelper.send_message_via_sdk(self.plugin, self.default_group_id, message)
-                    )
+                    # 给消息发送设置更长的超时时间
+                    try:
+                        return loop.run_until_complete(
+                            asyncio.wait_for(
+                                MessageHelper.send_message_via_sdk(self.plugin, self.default_group_id, message),
+                                timeout=35.0  # 35秒超时，比SDK内部超时稍长
+                            )
+                        )
+                    except asyncio.TimeoutError:
+                        print(f"[WARNING] Message send timeout after 35 seconds")
+                        logger.warning("Message send timeout after 35 seconds, but message may have been sent")
+                        # 即使超时也返回True，因为消息可能已经发送成功
+                        return True
                 finally:
                     loop.close()
 

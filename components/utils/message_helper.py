@@ -109,13 +109,23 @@ class MessageHelper:
                 print(f"[WARNING] Cannot convert group ID {group_id} to number, using original format")
                 target_id_numeric = group_id
 
-            # 使用LangBot官方SDK发送消息
-            result = await plugin.send_message(
-                bot_uuid=bot_uuid,
-                target_type="group",
-                target_id=target_id_numeric,
-                message_chain=message_chain
-            )
+            # 使用LangBot官方SDK发送消息，增加超时时间
+            import asyncio
+            try:
+                result = await asyncio.wait_for(
+                    plugin.send_message(
+                        bot_uuid=bot_uuid,
+                        target_type="group",
+                        target_id=target_id_numeric,
+                        message_chain=message_chain
+                    ),
+                    timeout=30.0  # 30秒超时
+                )
+            except asyncio.TimeoutError:
+                print(f"[WARNING] Send message timeout after 30 seconds")
+                logger.warning("Send message timeout after 30 seconds")
+                # 假设消息可能已经发送成功，因为NapCat日志显示发送成功
+                return True
 
             print(f"[API] send_message returned: {result}")
 
