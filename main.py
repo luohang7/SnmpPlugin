@@ -14,8 +14,16 @@ class EmailAlarmListenerPlugin(BasePlugin):
 
         # 预先获取并缓存机器人列表
         try:
-            from .components.utils.message_helper import MessageHelper
+            import sys
+            import os
             import asyncio
+
+            # 添加插件路径到sys.path以支持绝对导入
+            plugin_dir = os.path.dirname(os.path.abspath(__file__))
+            if plugin_dir not in sys.path:
+                sys.path.insert(0, plugin_dir)
+
+            from components.utils.message_helper import MessageHelper
 
             logger.info("Pre-caching bot list to avoid timeout issues...")
             MessageHelper._cached_bots = await asyncio.wait_for(self.get_bots(), timeout=15.0)
