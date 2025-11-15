@@ -24,9 +24,9 @@ spec:
       en_US: The default QQ group ID to send SNMP trap alerts to
       zh_Hans: 发送SNMP Trap告警的默认QQ群号
   dependencies:
-  pysnmp: ">=7.1.0"
-  pyasn1: ">=0.4.8"
-components:
+  - pysnmp: ">=7.1.0"
+  - pyasn1: ">=0.4.8"
+  components:
     EventListener:
       fromDirs:
       - path: components/event_listener/
