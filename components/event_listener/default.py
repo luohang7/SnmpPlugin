@@ -40,13 +40,23 @@ class DefaultEventListener(EventListener):
             logger.info("[DEBUG] self.plugin type: %s", type(self.plugin))
             logger.info("[DEBUG] self.plugin is None: %s", self.plugin is None)
 
-            # 读取环境变量中的群组ID
-            env_group_id = os.getenv('SMTP_DEFAULT_GROUP_ID')
-            if env_group_id and env_group_id.strip():
-                self.default_group_id = env_group_id.strip()
+            # 动态获取QQ群号配置（优先级：插件配置 > 环境变量 > 默认值）
+            from ..utils.message_helper import MessageHelper
+            try:
+                self.default_group_id = MessageHelper.get_group_id(self.plugin)
+                logger.info("[INIT] Read group ID from config: %s", self.default_group_id)
+            except Exception as e:
+                logger.warning(f"[INIT] Failed to get group ID from config, using fallback: {e}")
+                # 备用方案：直接从环境变量获取
+                env_group_id = os.getenv('SMTP_DEFAULT_GROUP_ID')
+                if env_group_id and env_group_id.strip():
+                    self.default_group_id = env_group_id.strip()
+                    logger.info("[INIT] Read group ID from environment variable: %s", self.default_group_id)
+                else:
+                    self.default_group_id = "1056816501"
+                    logger.info("[INIT] Using default group ID: %s", self.default_group_id)
 
             logger.info("[INIT] Starting SMTP Email listener initialization")
-            logger.info("[INIT] Read group ID from environment variable: %s", self.default_group_id)
 
             if self.plugin is None:
                 logger.error("[ERROR] self.plugin is None - MessageHelper will not work")
@@ -226,10 +236,16 @@ class DefaultEventListener(EventListener):
                         key_info['告警源'] = line.split(':', 1)[1].strip()
                     elif '告警名称:' in line:
                         key_info['告警名称'] = line.split(':', 1)[1].strip()
+                    elif '告警主题:' in line:
+                        # 将告警主题映射为告警名称
+                        key_info['告警名称'] = line.split(':', 1)[1].strip()
                     elif '告警时间:' in line:
                         key_info['告警时间'] = line.split(':', 1)[1].strip()
                     elif '告警描述:' in line:
                         key_info['告警描述'] = line.split(':', 1)[1].strip()
+                    elif '告警级别:' in line:
+                        # 忽略告警级别字段，不提取
+                        pass
 
                     # 设备相关字段
                     elif '设备:' in line or 'device:' in line.lower():
@@ -345,10 +361,29 @@ class DefaultEventListener(EventListener):
                 # 直接发送解析出的告警内容，只包含4个字段
                 formatted_message = alarm_content
 
-                logger.info("[DEBUG] Sending message to group: %s", self.default_group_id)
+                # 动态获取最新的群组ID配置 - 同步版本
+                old_group_id = self.default_group_id
+                logger.info(f"[DYNAMIC] Starting group ID fetch, current: {old_group_id}")
 
-                # 发送群消息
-                success = self._send_group_message(formatted_message)
+                try:
+                    # 直接调用同步方法
+                    latest_group_id = MessageHelper.get_group_id(self.plugin)
+                    logger.info(f"[DYNAMIC] Successfully fetched latest group ID: {latest_group_id}")
+
+                    if latest_group_id != old_group_id:
+                        logger.info(f"[DYNAMIC] Group ID updated: {old_group_id} -> {latest_group_id}")
+                        self.default_group_id = latest_group_id
+                    else:
+                        logger.info(f"[DYNAMIC] Group ID unchanged: {old_group_id}")
+
+                except Exception as config_error:
+                    logger.warning(f"[DYNAMIC] Failed to get latest config: {config_error}")
+                    # 保持原有群组ID
+
+                logger.info(f"[DYNAMIC] Final group ID for sending: {self.default_group_id}")
+
+                # 发送群消息，使用动态获取的群组ID
+                success = self._send_group_message(formatted_message, self.default_group_id)
                 if success:
                     # 发送成功后等待2秒，避免频率限制
                     import time
@@ -476,10 +511,12 @@ class DefaultEventListener(EventListener):
 
     # _decode_mime_header 方法已移除，因为不再解析邮件主题
 
-    def _send_group_message(self, message: str) -> bool:
+    def _send_group_message(self, message: str, group_id: str = None) -> bool:
         """发送消息到QQ群，只使用SDK"""
         try:
-            logger.info("[SEND] Sending message to QQ group %s", self.default_group_id)
+            # 如果没有提供群组ID，使用缓存的值
+            target_group_id = group_id if group_id else self.default_group_id
+            logger.info("[SEND] Sending message to QQ group %s", target_group_id)
 
             # 使用MessageHelper发送消息
             from ..utils.message_helper import MessageHelper
@@ -494,7 +531,7 @@ class DefaultEventListener(EventListener):
                     try:
                         return loop.run_until_complete(
                             asyncio.wait_for(
-                                MessageHelper.send_message_via_sdk(self.plugin, self.default_group_id, message),
+                                MessageHelper.send_message_via_sdk(self.plugin, target_group_id, message),
                                 timeout=35.0  # 35秒超时，比SDK内部超时稍长
                             )
                         )
@@ -509,7 +546,7 @@ class DefaultEventListener(EventListener):
             success = run_async()
 
             if success:
-                logger.info("[SUCCESS] Message sent to QQ group %s", self.default_group_id)
+                logger.info("[SUCCESS] Message sent to QQ group %s", target_group_id)
                 return True
             else:
                 logger.error("[ERROR] Message sending failed")
