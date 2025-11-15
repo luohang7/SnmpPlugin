@@ -82,9 +82,8 @@ class DefaultEventListener(EventListener):
                         data, addr = self.udp_socket.recvfrom(4096)
                         if data:
                             self.trap_count += 1
-                            text_data = data.decode('utf-8', errors='ignore')
                             print(f"[UDP] Received packet: from {addr[0]}:{addr[1]}, length {len(data)} bytes")
-                            self._process_trap_data(text_data, addr)
+                            self._process_trap_data(data, addr)
                     except socket.timeout:
                         # 超时是正常的，继续循环检查stop_event
                         continue
@@ -98,7 +97,7 @@ class DefaultEventListener(EventListener):
             if self.udp_socket:
                 self.udp_socket.close()
 
-    def _process_trap_data(self, text_data: str, addr):
+    def _process_trap_data(self, data: bytes, addr):
         """处理接收到的Trap数据"""
         try:
             timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -107,16 +106,50 @@ class DefaultEventListener(EventListener):
             print(f"[TRAP] === Received SNMP Trap #{self.trap_count} ===")
             print(f"[TRAP] Source: {addr[0]}:{addr[1]}")
             print(f"[TRAP] Time: {timestamp}")
-            print(f"[TRAP] Length: {len(text_data)} bytes")
-            print(f"[TRAP] Content: {text_data}")
+            print(f"[TRAP] Length: {len(data)} bytes")
             print(f"[TRAP] Target group: {self.default_group_id}")
 
-            # 详细分析收到的数据格式
-            print(f"[DEBUG] Raw data analysis:")
-            print(f"[DEBUG] Line count: {len(text_data.split())}")
-            lines = text_data.split('\n')
-            for i, line in enumerate(lines):
-                print(f"[DEBUG] Line {i+1}: '{line.strip()}'")
+            # 显示十六进制数据用于调试
+            hex_data = data.hex()
+            print(f"[DEBUG] Hex data: {hex_data}")
+
+            # 检查是否是IP包（以太网帧+IP头+UDP头+SNMP数据）
+            # 以太网头14字节，IP头以0x45开头，SNMP数据以0x30开头
+            if len(data) >= 28 and data[14] == 0x45 and data[28:30] == b'\x30\x82':
+                # 这是一个以太网帧+IP包+UDP头+SNMP trap
+                print(f"[DEBUG] Detected Ethernet+IP+UDP+SNMP packet")
+                # 跳过以太网头(14) + IP头 + UDP头(8)
+                # IP头长度 = (IHL字段 * 4)，IHL是data[14]的低4位
+                ip_header_length = (data[14] & 0x0f) * 4
+                total_headers = 14 + ip_header_length + 8  # 以太网 + IP + UDP
+                if len(data) > total_headers:
+                    snmp_data = data[total_headers:]
+                    print(f"[DEBUG] Extracted SNMP data, headers: {total_headers} bytes, SNMP: {len(snmp_data)} bytes")
+                    print(f"[DEBUG] SNMP hex data: {snmp_data.hex()}")
+                else:
+                    snmp_data = data
+            elif len(data) >= 20 and data[0:2] == b'\x30\x82':
+                # 纯SNMP数据包
+                print(f"[DEBUG] Detected pure SNMP packet")
+                snmp_data = data
+            else:
+                # 其他情况，尝试查找SNMP起始位置
+                print(f"[DEBUG] Unknown packet format, searching for SNMP data...")
+                snmp_data = data
+                # 查找SNMP SEQUENCE标记
+                for i in range(len(data) - 2):
+                    if data[i:i+2] == b'\x30\x82':
+                        snmp_data = data[i:]
+                        print(f"[DEBUG] Found SNMP data at offset {i}")
+                        break
+
+            # 尝试解析为ASCII用于显示
+            try:
+                text_data = data.decode('utf-8', errors='ignore')
+                print(f"[DEBUG] ASCII representation: {text_data}")
+            except:
+                text_data = ""
+                print(f"[DEBUG] Could not decode as ASCII")
 
             # 检查是否包含网络设备相关的关键词
             trap_content_lower = text_data.lower()
@@ -147,7 +180,7 @@ class DefaultEventListener(EventListener):
                             severity="Unknown",  # 由MessageHelper内部解析
                             source=addr[0],     # 传入源IP作为默认值
                             trap_count=self.trap_count,
-                            raw_data=text_data,
+                            raw_data=snmp_data.hex(),  # 传递十六进制数据给解析器
                             group_id=self.default_group_id
                         )
                     )
@@ -168,6 +201,8 @@ class DefaultEventListener(EventListener):
 
         except Exception as e:
             print(f"[ERROR] Error processing Trap data: {e}")
+            import traceback
+            print(f"[ERROR] Traceback: {traceback.format_exc()}")
 
     def _send_group_message(self, message: str) -> bool:
         """发送消息到QQ群，只使用SDK"""

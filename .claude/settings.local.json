@@ -5,7 +5,8 @@
       "Bash(findstr:*)",
       "Bash(python:*)",
       "mcp__context7__resolve-library-id",
-      "Bash(ping:*)"
+      "Bash(ping:*)",
+      "Bash(.venv/Scripts/python.exe:*)"
     ],
     "deny": [],
     "ask": []

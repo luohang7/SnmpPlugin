@@ -160,23 +160,23 @@ class MessageHelper:
                                 for var_type, var_value in variables:
                                     print(f"[DEBUG] 处理变量: {var_type} = {var_value}")
 
-                                    # 第一优先级: 标准SNMP sysName (1.3.6.1.2.1.1.5.0)
-                                    if var_type == 'sysname' and var_value:
+                                    # 第一优先级: 华为Device Name OID (1.3.6.1.4.1.25506.4.2.2.1.8)
+                                    if var_type == 'device_name' and var_value:
                                         parsed_info['device_name'] = var_value
-                                        parsed_info['sysname_source'] = 'standard_snmp'
-                                        print(f"[DEBUG] 设备SysName (标准SNMP): {var_value}")
-                                    # 第二优先级: 华为设备名称OID
-                                    elif var_type == 'device_name' and var_value:
-                                        if parsed_info['device_name'] == 'Unknown' or not parsed_info.get('sysname_source'):
-                                            parsed_info['device_name'] = var_value
-                                            parsed_info['device_name_source'] = 'huawei_oid'
-                                        print(f"[DEBUG] 设备名称(华为OID): {var_value}")
-                                    # 第三优先级: NMS设备描述
+                                        parsed_info['device_name_source'] = 'huawei_device_name'
+                                        print(f"[DEBUG] 设备名称(华为Device Name OID): {var_value}")
+                                    # 第二优先级: NMS设备描述 (1.3.6.1.4.1.25506.4.1.1.1.2)
                                     elif var_type == 'nms_device_desc' and var_value:
-                                        if parsed_info['device_name'] == 'Unknown' or not parsed_info.get('sysname_source'):
+                                        if parsed_info['device_name'] == 'Unknown':
                                             parsed_info['device_name'] = var_value
                                             parsed_info['device_name_source'] = 'nms_desc'
                                         print(f"[DEBUG] 设备名称(NMS描述): {var_value}")
+                                    # 第三优先级: 标准SNMP sysName (1.3.6.1.2.1.1.5.0)
+                                    elif var_type == 'sysname' and var_value:
+                                        if parsed_info['device_name'] == 'Unknown':
+                                            parsed_info['device_name'] = var_value
+                                            parsed_info['sysname_source'] = 'standard_snmp'
+                                        print(f"[DEBUG] 设备SysName (标准SNMP): {var_value}")
                                     # 第四优先级: 系统描述
                                     elif var_type == 'sysdescr' and var_value:
                                         if parsed_info['device_name'] == 'Unknown' or not parsed_info.get('sysname_source'):
@@ -679,118 +679,32 @@ class MessageHelper:
         # 解析SNMP数据
         parsed_data = parse_snmp_trap(clean_raw_data(raw_data))
 
-        # 构造详细的中文格式化消息（包含标题）
+        # 构造简化的格式化消息
         formatted_message = "【网络设备告警】\n\n"
 
-        # 告警时间 - 优先使用解析的设备时间，否则使用当前北京时间
+        # 时间 - 优先使用解析的设备时间，否则使用当前北京时间
         display_time = parsed_data['alarm_time'] if parsed_data['alarm_time'] != timestamp else timestamp
-        formatted_message += f"🕐 告警时间: {display_time}\n"
+        formatted_message += f"时间：{display_time}\n"
 
         # 设备名称 - 优先使用解析的设备名
         device_name = parsed_data['device_name']
         if device_name != "Unknown":
-            formatted_message += f"🏷️ 设备名称: {device_name}\n"
+            formatted_message += f"设备名称：{device_name}\n"
+        else:
+            formatted_message += f"设备名称：未知设备\n"
 
-        # 设备类型 - 显示H3C NMS解析的设备类型
-        if parsed_data['device_type'] != "Unknown":
-            formatted_message += f"🔧 设备类型: {parsed_data['device_type']}\n"
-
-        # 设备地址 - 显示解析出的故障设备IP
+        # IP地址 - 显示解析出的故障设备IP
         if parsed_data['fault_device_ip'] != "Unknown":
-            formatted_message += f"🖥️ 设备地址: {parsed_data['fault_device_ip']}\n"
-
-        # 告警级别
-        if parsed_data['severity'] != "Unknown":
-            # 添加级别对应的emoji，新增"紧急"级别
-            severity_emoji = {
-                '紧急': '🚨',
-                '严重': '🔴',
-                '重要': '🟠',
-                '警告': '🟡',
-                '次要': '🔵',
-                '信息': '🔷',
-                'Critical': '🚨',
-                'Major': '🟠',
-                'Warning': '🟡',
-                'Minor': '🔵',
-                'Info': '🔷'
-            }
-            emoji = severity_emoji.get(parsed_data['severity'], '⚠️')
-            formatted_message += f"{emoji} 告警级别: {parsed_data['severity']}\n"
-
-        # 告警分类 - 显示H3C NMS的告警分类
-        if parsed_data['alarm_category'] != "Unknown":
-            formatted_message += f"📂 告警分类: {parsed_data['alarm_category']}\n"
+            formatted_message += f"ip地址：{parsed_data['fault_device_ip']}\n"
+        else:
+            formatted_message += f"ip地址：{source}\n"
 
         # 告警内容 - 优先使用解析的告警内容
         alarm_content = parsed_data['alarm_content'] if parsed_data['alarm_content'] != 'Unknown' else message
         if alarm_content and alarm_content != "Unknown":
-            formatted_message += f"⚠️ 告警内容: {alarm_content}\n"
-
-        # 轮询类型 - 显示H3C NMS的轮询类型
-        if 'poll_type' in parsed_data and parsed_data['poll_type'] != "Unknown":
-            poll_type_map = {
-                '0': 'Ping',
-                '1': 'SNMP',
-                '2': 'Telnet',
-                '3': 'SSH'
-            }
-            poll_type_display = poll_type_map.get(parsed_data['poll_type'], parsed_data['poll_type'])
-            formatted_message += f"🔄 轮询类型: {poll_type_display}\n"
-
-        # 接口信息 - 显示标准SNMP接口参数
-        if 'interface_index' in parsed_data and parsed_data['interface_index'] != "Unknown":
-            formatted_message += f"🔌 接口索引: {parsed_data['interface_index']}\n"
-
-        if 'interface_description' in parsed_data and parsed_data['interface_description'] != "Unknown":
-            formatted_message += f"📝 接口描述: {parsed_data['interface_description']}\n"
-
-        if 'interface_oper_status' in parsed_data and parsed_data['interface_oper_status'] != "Unknown":
-            status_emoji = {'up': '🟢', 'down': '🔴', 'testing': '🟡', 'unknown': '⚪', 'dormant': '💤', 'notPresent': '❌', 'lowerLayerDown': '🔴'}
-            status_display = parsed_data['interface_oper_status']
-            emoji = status_emoji.get(status_display, '⚠️')
-            formatted_message += f"📊 运行状态: {emoji} {status_display.title()}\n"
-
-        if 'interface_admin_status' in parsed_data and parsed_data['interface_admin_status'] != "Unknown":
-            admin_emoji = {'up': '✅', 'down': '❌', 'testing': '⚠️'}
-            admin_display = parsed_data['interface_admin_status']
-            emoji = admin_emoji.get(admin_display, '⚠️')
-            formatted_message += f"⚙️ 管理状态: {emoji} {admin_display.title()}\n"
-
-        # 添加详细解析信息（如果有额外的variables）
-        if parsed_data['variables']:
-            # 分类显示解析出的详细信息
-            details_by_category = {}
-            for var in parsed_data['variables']:
-                if ':' in var:
-                    category, value = var.split(':', 1)
-                    category = category.strip()
-                    value = value.strip()
-
-                    # 去重处理
-                    if category not in details_by_category:
-                        details_by_category[category] = []
-                    if value not in details_by_category[category]:
-                        details_by_category[category].append(value)
-
-            # 添加分类的详细信息
-            if details_by_category:
-                formatted_message += "\n📋 详细信息:\n"
-                for category, values in details_by_category.items():
-                    if len(values) == 1:
-                        formatted_message += f"• {category}: {values[0]}\n"
-                    else:
-                        formatted_message += f"• {category}: {', '.join(values)}\n"
-
-        # SNMP Trap原始信息（调试用，可选）
-        if parsed_data['generic_type'] != 'Unknown' or parsed_data['specific_type'] != 'Unknown':
-            formatted_message += "\n🔧 SNMP信息:\n"
-            if parsed_data['generic_type'] != 'Unknown':
-                formatted_message += f"• 通用类型: {parsed_data['generic_type']}\n"
-            if parsed_data['specific_type'] != 'Unknown':
-                formatted_message += f"• 特定类型: {parsed_data['specific_type']}\n"
-            if parsed_data['enterprise'] != 'Unknown':
-                formatted_message += f"• 企业OID: {parsed_data['enterprise']}\n"
+            formatted_message += f"告警内容：{alarm_content}\n"
+        else:
+            formatted_message += f"告警内容：网络设备告警\n"
 
         return formatted_message
 

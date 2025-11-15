@@ -200,9 +200,24 @@ class SNMPBinaryParser:
 
         for i in range(len(data) - 1):
             if data[i] == 0x30:  # SEQUENCE tag
-                length = data[i + 1]
-                if i + 2 + length <= len(data):
-                    varbind_data = data[i + 2:i + 2 + length]
+                # 读取长度字节
+                if i + 1 >= len(data):
+                    continue
+
+                if data[i + 1] < 0x80:  # 短格式长度
+                    length = data[i + 1]
+                    length_bytes = 1
+                else:  # 长格式长度
+                    length_bytes = data[i + 1] & 0x7f
+                    if i + 1 + length_bytes >= len(data):
+                        continue
+                    length = 0
+                    for j in range(length_bytes):
+                        length = (length << 8) | data[i + 2 + j]
+                    length_bytes += 1
+
+                if i + 1 + length_bytes + length <= len(data):
+                    varbind_data = data[i + 1 + length_bytes:i + 1 + length_bytes + length]
 
                     # 检查这个SEQUENCE是否包含其他SEQUENCE (VarBind entries)
                     sub_sequences = 0
@@ -238,6 +253,7 @@ class SNMPBinaryParser:
                 best_candidate = varbind_list_candidates[0]
 
             varbind_list_data = best_candidate[2]
+            print(f"[DEBUG] Selected VarBindList: position={best_candidate[0]}, length={best_candidate[1]}, sub_sequences={best_candidate[3]}")
 
             # 解析VarBindList中的每个VarBind
             oid_value_pairs = self.parse_varbind_sequence(varbind_list_data)
@@ -266,9 +282,12 @@ class SNMPBinaryParser:
                 '1.3.6.1.4.1.25506.4.2.2.1.13': 'alarm_suggestion',   # 修复建议
             }
 
+            print(f"[DEBUG] Found {len(oid_value_pairs)} OID-value pairs")
             for oid, value in oid_value_pairs:
+                print(f"[DEBUG] OID: {oid}, Value: {value}")
                 if oid in huawei_oid_map:
                     var_type = huawei_oid_map[oid]
+                    print(f"[DEBUG] Mapped OID {oid} to {var_type}")
 
                     # 特殊处理设备名称 - 检查是否为十六进制编码
                     if var_type == 'device_name' and isinstance(value, str):
@@ -279,6 +298,9 @@ class SNMPBinaryParser:
                             value = decoded_name
 
                     variables.append((var_type, value))
+                else:
+                    # 即使不认识这个OID，也添加到变量列表中
+                    variables.append(('unknown_oid', f"{oid}={value}"))
 
         # 如果结构化解析失败，回退到简单解析
         if not variables:
@@ -513,16 +535,34 @@ class SNMPBinaryParser:
         while i < len(varbind_data) - 5:
             # 查找变量绑定SEQUENCE (0x30)
             if varbind_data[i] == 0x30:
-                varbind_length = varbind_data[i + 1]
-                if i + 2 + varbind_length <= len(varbind_data):
-                    varbind_content = varbind_data[i + 2:i + 2 + varbind_length]
+                # 读取长度字节
+                if i + 1 >= len(varbind_data):
+                    break
+
+                if varbind_data[i + 1] < 0x80:  # 短格式长度
+                    varbind_length = varbind_data[i + 1]
+                    length_bytes = 1
+                else:  # 长格式长度
+                    length_bytes = varbind_data[i + 1] & 0x7f
+                    if i + 1 + length_bytes >= len(varbind_data):
+                        i += 1
+                        continue
+                    varbind_length = 0
+                    for j in range(length_bytes):
+                        varbind_length = (varbind_length << 8) | varbind_data[i + 2 + j]
+                    length_bytes += 1
+
+                if i + 1 + length_bytes + varbind_length <= len(varbind_data):
+                    varbind_content = varbind_data[i + 1 + length_bytes:i + 1 + length_bytes + varbind_length]
+                    print(f"[DEBUG] Parsing VarBind at offset {i}, length {varbind_length}")
 
                     # 解析OID和值
                     oid, value = self.parse_oid_value_pair(varbind_content)
                     if oid and value:
+                        print(f"[DEBUG] Parsed OID-Value: {oid} = {value}")
                         oid_value_pairs.append((oid, value))
 
-                    i += 2 + varbind_length
+                    i += 1 + length_bytes + varbind_length
                 else:
                     i += 1
             else:
@@ -537,20 +577,38 @@ class SNMPBinaryParser:
 
             # 解析OID (OBJECT IDENTIFIER tag = 0x06)
             if i < len(varbind_content) and varbind_content[i] == 0x06:
-                oid_length = varbind_content[i + 1]
-                oid_bytes = varbind_content[i + 2:i + 2 + oid_length]
-                oid = self.parse_oid_bytes(oid_bytes)
+                # 读取OID长度
+                if i + 1 >= len(varbind_content):
+                    return None, None
 
-                if oid:
-                    i += 2 + oid_length
+                if varbind_content[i + 1] < 0x80:  # 短格式长度
+                    oid_length = varbind_content[i + 1]
+                    length_bytes = 1
+                else:  # 长格式长度
+                    length_bytes = varbind_content[i + 1] & 0x7f
+                    if i + 1 + length_bytes >= len(varbind_content):
+                        return None, None
+                    oid_length = 0
+                    for j in range(length_bytes):
+                        oid_length = (oid_length << 8) | varbind_content[i + 2 + j]
+                    length_bytes += 1
 
-                    # 解析值 (根据数据类型)
-                    if i < len(varbind_content):
-                        value = self.parse_snmp_value(varbind_content[i:], oid)
-                        return oid, value
+                if i + 1 + length_bytes + oid_length <= len(varbind_content):
+                    oid_bytes = varbind_content[i + 1 + length_bytes:i + 1 + length_bytes + oid_length]
+                    oid = self.parse_oid_bytes(oid_bytes)
+                    print(f"[DEBUG] Parsed OID: {oid}")
 
-        except Exception:
-            pass
+                    if oid:
+                        i += 1 + length_bytes + oid_length
+
+                        # 解析值 (根据数据类型)
+                        if i < len(varbind_content):
+                            value = self.parse_snmp_value(varbind_content[i:], oid)
+                            print(f"[DEBUG] Parsed value: {value}")
+                            return oid, value
+
+        except Exception as e:
+            print(f"[DEBUG] Error parsing OID-value pair: {e}")
 
         return None, None
 
@@ -561,12 +619,24 @@ class SNMPBinaryParser:
                 return None
 
             value_tag = value_data[0]
-            value_length = value_data[1]
 
-            if value_length == 0 or 2 + value_length > len(value_data):
+            # 读取值长度
+            if value_data[1] < 0x80:  # 短格式长度
+                value_length = value_data[1]
+                length_bytes = 1
+            else:  # 长格式长度
+                length_bytes = value_data[1] & 0x7f
+                if 1 + length_bytes >= len(value_data):
+                    return None
+                value_length = 0
+                for j in range(length_bytes):
+                    value_length = (value_length << 8) | value_data[2 + j]
+                length_bytes += 1
+
+            if value_length == 0 or 1 + length_bytes + value_length > len(value_data):
                 return None
 
-            value_bytes = value_data[2:2 + value_length]
+            value_bytes = value_data[1 + length_bytes:1 + length_bytes + value_length]
 
             # 根据数据类型解析值
             if value_tag == 0x04:  # OCTET STRING (字符串)
