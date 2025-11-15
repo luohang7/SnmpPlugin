@@ -14,6 +14,11 @@ logger = logging.getLogger(__name__)
 class MessageHelper:
     """消息发送辅助类 - 邮件版本"""
 
+    # 缓存机器人信息，避免重复获取
+    _cached_bots = None
+    _cache_time = None
+    _cache_ttl = 300  # 缓存5分钟
+
     @staticmethod
     async def get_group_id(plugin) -> str:
         """获取群组ID，优先级：插件配置 > 环境变量 > 默认值"""
@@ -44,8 +49,35 @@ class MessageHelper:
             print(f"[SEND] Attempting to send {message_type} to QQ group {group_id}")
             print(f"[SEND] Message length: {len(message)} characters")
 
-            # 获取可用的机器人列表
-            bots = await plugin.get_bots()
+            # 获取可用的机器人列表（使用缓存）
+            import time
+            current_time = time.time()
+
+            # 检查缓存是否有效
+            if (MessageHelper._cached_bots is None or
+                MessageHelper._cache_time is None or
+                current_time - MessageHelper._cache_time > MessageHelper._cache_ttl):
+
+                print(f"[DEBUG] Getting fresh bots list (cache expired or empty)")
+                try:
+                    import asyncio
+                    MessageHelper._cached_bots = await asyncio.wait_for(plugin.get_bots(), timeout=15.0)
+                    MessageHelper._cache_time = current_time
+                    print(f"[DEBUG] Bot list cached successfully")
+                except asyncio.TimeoutError:
+                    print(f"[WARNING] get_bots() timeout, using cached data if available")
+                    if MessageHelper._cached_bots is None:
+                        print(f"[ERROR] No cached bot data available")
+                        return False
+                except Exception as e:
+                    print(f"[WARNING] get_bots() failed: {e}, using cached data if available")
+                    if MessageHelper._cached_bots is None:
+                        print(f"[ERROR] No cached bot data available")
+                        return False
+            else:
+                print(f"[DEBUG] Using cached bots list (cache age: {current_time - MessageHelper._cache_time:.1f}s)")
+
+            bots = MessageHelper._cached_bots
 
             if not bots:
                 print("[ERROR] No available bots configured")

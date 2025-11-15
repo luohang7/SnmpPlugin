@@ -199,9 +199,14 @@ class DefaultEventListener(EventListener):
                 # 输出解析后的详细信息
                 logger.info("[DEBUG] Parsed email info:")
                 logger.info("[DEBUG]   From: %s", email_info.get('from', 'N/A'))
-                logger.info("[DEBUG]   Subject: %s", email_info.get('subject', 'N/A'))
                 logger.info("[DEBUG]   Content length: %d", len(email_info.get('content', '')))
-                logger.info("[DEBUG]   Content (first 300 chars): %s", email_info.get('content', '')[:300])
+                logger.info("[DEBUG]   Content (first 500 chars): %s", email_info.get('content', '')[:500])
+
+                # 输出完整的解码内容用于调试接口信息
+                print(f"[DEBUG] === 完整解码后的邮件内容 ===")
+                print(f"内容:")
+                print(email_info.get('content', 'N/A'))
+                print(f"[DEBUG] === 解码内容结束 ===")
 
         
                 # 从邮件内容中提取关键告警信息
@@ -264,29 +269,30 @@ class DefaultEventListener(EventListener):
                     elif '说明:' in line or 'note:' in line.lower():
                         additional_info.append(f"说明: {line.split(':', 1)[1].strip()}")
 
-                # 构造详细的告警消息
+                # 构造告警消息，只包含指定的4个字段
                 if key_info:
-                    alarm_content = f"设备: {key_info.get('告警源', '未知')}, 状态: {key_info.get('告警名称', '未知')}"
+                    parts = []
 
-                    # 添加告警描述（包含接口信息）
+                    # 按照用户要求的顺序添加字段
+                    if '告警源' in key_info:
+                        parts.append(f"告警源: {key_info['告警源']}")
+
+                    if '告警名称' in key_info:
+                        parts.append(f"告警名称: {key_info['告警名称']}")
+
+                    if '告警时间' in key_info:
+                        parts.append(f"告警时间: {key_info['告警时间']}")
+
                     if '告警描述' in key_info:
-                        alarm_content += f"\n详情: {key_info['告警描述']}"
+                        parts.append(f"告警描述: {key_info['告警描述']}")
 
-                    # 添加额外信息
-                    if additional_info:
-                        if '告警描述' in key_info:
-                            alarm_content += f", {', '.join(additional_info)}"
-                        else:
-                            alarm_content += f"\n详情: {', '.join(additional_info)}"
+                    # 用换行连接各部分
+                    alarm_content = '\n'.join(parts)
                 else:
-                    # 如果没有找到标准格式，尝试从主题和内容中提取信息
-                    subject = email_info.get('subject', '邮件告警')
+                    # 如果没有找到标准格式，尝试从内容中提取信息
                     content = email_info.get('content', '')
 
-                    # 尝试从主题中提取关键信息
-                    if '告警' in subject or 'alarm' in subject.lower() or 'alert' in subject.lower():
-                        alarm_content = subject[:100]
-                    elif content:
+                    if content:
                         # 尝试智能提取内容中的关键信息
                         lines = [line.strip() for line in content.split('\n') if line.strip()]
 
@@ -314,7 +320,7 @@ class DefaultEventListener(EventListener):
                             if len(lines) > 1:
                                 alarm_content += f"\n详情: {lines[1][:60]}..."
                     else:
-                        alarm_content = subject[:100]
+                        alarm_content = "邮件告警"
 
                     # 如果还有剩余内容且长度合理，添加为详情
                     if content and len(content) > 50:
@@ -336,11 +342,8 @@ class DefaultEventListener(EventListener):
                 logger.info("[DEBUG]   Additional info count: %d", len(additional_info))
                 logger.info("[DEBUG]   Final alarm content: %s", alarm_content[:200])
 
-                # 构造发送到QQ群的消息格式
-                formatted_message = f"""【设备告警】
-
-时间：{timestamp}
-告警内容：{alarm_content}"""
+                # 直接发送解析出的告警内容，只包含4个字段
+                formatted_message = alarm_content
 
                 logger.info("[DEBUG] Sending message to group: %s", self.default_group_id)
 
@@ -365,14 +368,13 @@ class DefaultEventListener(EventListener):
                 pass
 
     def _parse_email_content(self, email_data: bytes) -> dict:
-        """解析邮件内容，提取发件人、主题和内容"""
+        """解析邮件内容，只提取正文内容（过滤主题）"""
         try:
             email_text = email_data.decode('utf-8', errors='ignore')
 
-            # 简单的邮件解析
+            # 只提取邮件内容，不解析主题
             email_info = {
                 'from': '未知发件人',
-                'subject': '无主题',
                 'content': ''
             }
 
@@ -385,12 +387,9 @@ class DefaultEventListener(EventListener):
                 line = line.strip()
 
                 if in_headers:
-                    # 解析邮件头
+                    # 只解析必要的邮件头，跳过主题
                     if line.lower().startswith('from:'):
                         email_info['from'] = line[5:].strip()
-                    elif line.lower().startswith('subject:'):
-                        subject_line = line[8:].strip()
-                        email_info['subject'] = self._decode_mime_header(subject_line)
                     elif line.lower().startswith('content-transfer-encoding:'):
                         content_encoding = line.split(':', 1)[1].strip().lower()
                         logger.info("[DEBUG] 检测到内容编码: %s", content_encoding)
@@ -430,20 +429,41 @@ class DefaultEventListener(EventListener):
                     import quopri
                     decoded_content = quopri.decodestring(raw_content).decode('utf-8', errors='ignore')
                     email_info['content'] = decoded_content
+                    logger.info("[DEBUG] Quoted-printable decode successful")
                 except Exception as decode_error:
                     logger.warning("[WARNING] Quoted-printable decode failed: %s", decode_error)
                     # 手动解码作为备选方案
                     try:
-                        manual_decoded = raw_content.replace('=\r\n', '').replace('=\n', '')
-                        manual_decoded = re.sub(r'=([0-9A-Fa-f]{2})', lambda m: chr(int(m.group(1), 16)), manual_decoded)
+                        # 首先处理软换行（=\r\n 和 =\n）
+                        cleaned = raw_content.replace('=\r\n', '').replace('=\n', '')
+                        # 然后处理十六进制编码
+                        manual_decoded = re.sub(r'=([0-9A-Fa-f]{2})', lambda m: chr(int(m.group(1), 16)), cleaned)
                         email_info['content'] = manual_decoded
-                    except:
+                        logger.info("[DEBUG] Manual quoted-printable decode successful")
+                    except Exception as manual_error:
+                        logger.warning("[WARNING] Manual quoted-printable decode failed: %s", manual_error)
                         email_info['content'] = raw_content
+            elif content_encoding is None or content_encoding == '7bit':
+                # 尝试自动检测编码
+                try:
+                    # 检查是否包含quoted-printable编码模式
+                    if '=3D' in raw_content or '=E' in raw_content:
+                        logger.info("[DEBUG] Auto-detecting quoted-printable encoding")
+                        import quopri
+                        decoded_content = quopri.decodestring(raw_content).decode('utf-8', errors='ignore')
+                        email_info['content'] = decoded_content
+                        logger.info("[DEBUG] Auto quoted-printable decode successful")
+                    else:
+                        email_info['content'] = raw_content
+                        logger.info("[DEBUG] Using raw content (no encoding detected)")
+                except Exception as auto_error:
+                    logger.warning("[WARNING] Auto-detect decode failed: %s", auto_error)
+                    email_info['content'] = raw_content
             else:
                 email_info['content'] = raw_content
 
-            logger.info("[EMAIL] Parsed - From: %s, Subject: %s, Content length: %d, Encoding: %s",
-                       email_info['from'], email_info['subject'], len(email_info['content']), content_encoding)
+            logger.info("[EMAIL] Parsed - From: %s, Content length: %d, Encoding: %s",
+                       email_info['from'], len(email_info['content']), content_encoding)
 
             return email_info
 
@@ -451,50 +471,10 @@ class DefaultEventListener(EventListener):
             logger.error("[ERROR] Error parsing email content: %s", e)
             return {
                 'from': '解析错误',
-                'subject': '邮件解析失败',
                 'content': f'邮件内容解析异常: {str(e)}'
             }
 
-    def _decode_mime_header(self, header: str) -> str:
-        """解码MIME编码的邮件头部，如 =?UTF-8?Q?...?= 或 =?UTF-8?B?...?="""
-        try:
-            import re
-
-            # 匹配MIME编码模式: =?charset?encoding?encoded-text?= （?=可选）
-            mime_pattern = r'=\?([^?]+)\?([BQbq])\?([^?]*)\?=?'
-
-            def decode_match(match):
-                charset = match.group(1).upper()
-                encoding = match.group(2).upper()
-                encoded_text = match.group(3)
-
-                try:
-                    if encoding == 'B':  # Base64编码
-                        decoded_bytes = base64.b64decode(encoded_text)
-                        return decoded_bytes.decode(charset, errors='ignore')
-                    elif encoding == 'Q':  # Quoted-printable编码
-                        # Quoted-printable解码
-                        decoded_text = encoded_text.replace('_', ' ')
-                        decoded_text = re.sub(r'=([0-9A-Fa-f]{2})', lambda m: chr(int(m.group(1), 16)), decoded_text)
-                        return decoded_text
-                except Exception as decode_error:
-                    logger.warning("[WARNING] MIME decode error: %s", decode_error)
-                    return match.group(0)
-
-                return match.group(0)
-
-            # 替换所有MIME编码的部分
-            decoded_header = re.sub(mime_pattern, decode_match, header)
-
-            # 如果解码后没有变化，直接返回原始头部
-            if decoded_header == header:
-                return header
-            else:
-                return decoded_header
-
-        except Exception as e:
-            logger.warning("[WARNING] MIME header decode error: %s", e)
-            return header
+    # _decode_mime_header 方法已移除，因为不再解析邮件主题
 
     def _send_group_message(self, message: str) -> bool:
         """发送消息到QQ群，只使用SDK"""
