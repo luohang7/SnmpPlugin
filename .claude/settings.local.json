@@ -6,7 +6,11 @@
       "Bash(python:*)",
       "mcp__context7__resolve-library-id",
       "Bash(ping:*)",
-      "Bash(.venv/Scripts/python.exe:*)"
+      "Bash(.venv/Scripts/python.exe:*)",
+      "Bash(.venvScriptspython.exe:*)",
+      "Bash(del:*)",
+      "Bash(dir:*)",
+      "Bash(where:*)"
     ],
     "deny": [],
     "ask": []

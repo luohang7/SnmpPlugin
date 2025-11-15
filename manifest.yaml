@@ -2,15 +2,15 @@ apiVersion: v1
 kind: Plugin
 metadata:
   author: luorisky
-  name: SnmpPlugin
+  name: EmailAlarmListenerPlugin
   repository: ''
-  version: 0.1.0
+  version: 2.0.0
   description:
-    en_US: 一个webhook插件接收snmp trap,并发送主动消息
-    zh_Hans: 一个webhook插件接收snmp trap,并发送主动消息
+    en_US: SMTP email alarm listener plugin that sends notifications to QQ groups
+    zh_Hans: SMTP邮件告警监听插件，自动发送通知到QQ群
   label:
-    en_US: SnmpPlugin
-    zh_Hans: SnmpPlugin
+    en_US: Email Alarm Listener
+    zh_Hans: 邮件告警监听插件
   icon: assets/icon.svg
 spec:
   config:
@@ -21,11 +21,9 @@ spec:
     type: string
     default: "123456789"
     description:
-      en_US: The default QQ group ID to send SNMP trap alerts to
-      zh_Hans: 发送SNMP Trap告警的默认QQ群号
-  dependencies:
-  - pysnmp: ">=7.1.0"
-  - pyasn1: ">=0.4.8"
+      en_US: The default QQ group ID to send email alarm notifications to
+      zh_Hans: 发送邮件告警通知的默认QQ群号
+  dependencies: []
   components:
     EventListener:
       fromDirs:
@@ -36,4 +34,4 @@ spec:
 execution:
   python:
     path: main.py
-    attr: SnmpPlugin
+    attr: EmailAlarmListenerPlugin
